@@ -32,10 +32,34 @@ For each loop:
 - for each md5: 
   - check if a new process should be started (based on max-threads per user) 
   - get end of last range
-  - craete new range.
+  - create new range.
   - push job to appropriate queue. 
 
 It's important to note that the manager does NOT receive the decoder-worker's results! The decoders process their ranges and 
 push the result back onto the beanstalk in a specific queue, which the BeanstalkWorkerResult listens to. 
 
 
+HOWTO install it: 
+I'm currently not sharing binaries yet, so you'll have to build it yourself.
+Prerequisites are 
+- beanstemc.jar
+- json-simple library
+- mysql-connector-java-5.0.8-bin.jar
+
+
+
+To actually run it successfully, you also need the beanstalkd daemon and a MySQL database. 
+The database schema is setup in the md5decoder_service project. (See its readme for more information).
+Currently, the manager has the beanstalk port hardcoded to TCP port 9000. 
+
+The daemon can usually be found in the package manager on a typical Linux installation. (As far as I can tell, there is no easy way
+to run beanstalkd in Windows...) After building in Netbeans, you'll end up with a jar file. This can be started with a simple:
+java -jar BeanstalkManagerMD5.jar
+
+This connects to the database and the beanstalk and starts monitoring uncracked md5 hashes from the database. 
+
+
+
+TODO: 
+- make the process configurable. Currently all values are hardcoded at the top of the class. Possibly also use a config file..
+- Make the range creation more efficient. Currently it starts at 1 character, ASCII code 33. THinking about making the starting point configurable on the webconsole. 
