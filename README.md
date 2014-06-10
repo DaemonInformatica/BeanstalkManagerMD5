@@ -62,5 +62,6 @@ This connects to the database and the beanstalk and starts monitoring uncracked 
 
 TODO: 
 - make the process configurable. Currently all values are hardcoded at the top of the class. Possibly also use a config file..
-- Make the range creation more efficient. Currently it starts at 1 character, ASCII code 33. THinking about making the starting point configurable on the webconsole. 
++ Make the range creation more efficient. Currently it starts at 1 character, ASCII code 33. THinking about making the starting point configurable on the webconsole. 
 - Make tubes configurable. Currently the only tube is longtube, but there should be a distinction between long, short and other tubes, depening on the size of the job. 
++ When starting, don't remove old unfinished processes, but update them to waiting. this way they'll get reposted. 

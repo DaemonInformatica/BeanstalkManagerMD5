@@ -18,6 +18,7 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Date;
 import java.util.Iterator;
+import java.util.List;
 import org.json.simple.JSONObject;
 
 /**
@@ -30,12 +31,12 @@ public class BeanstalkManagerMD5
     private final           String      m_user              = "root";
     private final           String      m_password          = "";
     private final           String      m_dbName            = "dbMD5Decode";
-    private static final    int         LONG_JOB            = 500;
-    private static final    int         SHORT_JOB           = 100;
+    private static final    int         LONG_JOB            = 5000;
+    private static final    int         SHORT_JOB           = 2000;
     private static final    String      LONG_JOB_TUBENAME   = "longtube";
     private static final    String      SHORT_JOB_TUBENAME  = "shorttube";
     private static final    int         MAX_JOBS_FOR_USER   = 5;
-    private static final    int         LOOP_SLEEP_INTERVAL = 1000;
+    private static final    int         LOOP_SLEEP_INTERVAL = 10;
     private                 Beanstemc   m_beanstemc         = null;
     
     public BeanstalkManagerMD5() 
@@ -114,17 +115,44 @@ public class BeanstalkManagerMD5
 
     private void purgeOldJobs()
     {
-        String sql = "DELETE FROM tblMD5Process WHERE status<>'completed'";
+        String      sql = "UPDATE tblMD5Process SET status='waiting' WHERE status <> 'completed'";
+        ResultSet   rsWaiting;
+        
         try
         {
             PreparedStatement pSt = m_conn.prepareStatement(sql);
             pSt.execute();
+            
+            // after any jobs are set to waiting, they'll have to be re-submitted.
+            // get waiting jobs. 
+                                sql         = "SELECT id, start, end FROM tblMD5Process WHERE status='waiting'";
+            PreparedStatement   pStWaiting  = m_conn.prepareStatement(sql);
+                                rsWaiting   = pStWaiting.executeQuery();
+
+            // for each job waiting: 
+            System.out.println("Pushing old job...");
+            while(rsWaiting.next())
+            {
+                // gather parameters. 
+                int     md5ID   = rsWaiting.getInt(1);
+                String  start   = rsWaiting.getString(2);
+                String  end     = rsWaiting.getString(3);
+
+                // call pushbeanjob. 
+                pushBeanJob(md5ID, start, end, true);
+            }
+            
+            pSt.close();
+            rsWaiting.close();
         }
         catch(SQLException sqlE)
         {
-            System.err.println("purgeOldJobs: SQL Exception: " + sqlE.toString());
-        }
+            System.err.println("purgeOldJobs: SQL Exception: " + sqlE.toString());   
+            return;
+        }    
     }
+    
+    
     private ArrayList<Integer> getUncrackedMD5IDs() throws SQLException
     {
         ArrayList<Integer>  arrIDs  = new ArrayList<Integer>();
@@ -138,7 +166,28 @@ public class BeanstalkManagerMD5
             arrIDs.add(id);
         }
         
+        st.close();
+        rs.close();
+        
         return arrIDs;
+    }
+    
+    private String getInitialStart(int md5ID) throws SQLException
+    {
+        String              start   = "";
+        String              sql     = "SELECT start FROM tblMD5 WHERE id=?;";
+        PreparedStatement   st      = m_conn.prepareStatement(sql);
+        
+        st.setInt(1, md5ID);
+        ResultSet rs = st.executeQuery();
+        
+        if(rs.next())
+            start = rs.getString(1);
+        
+        st.close();
+        rs.close();
+        
+        return start;
     }
     
     private String getLastSetEnd(int md5ID)
@@ -157,7 +206,12 @@ public class BeanstalkManagerMD5
             
             if(rs.next())
                 str = rs.getString(1);
+            else
+                str = getInitialStart(md5ID);
             
+            st.clearBatch();
+            st.close();
+            rs.close();
         }
         catch(SQLException sqlE) 
         {
@@ -192,15 +246,14 @@ public class BeanstalkManagerMD5
                 byteArrStart[i] = 33;
         }
         else
-        // for(int i = newLen - 1; i >= 0; i--)
         {   
             for(int i = newLen - 1; i >= 0; i--)
                 byteArrStart[i] = prevEndByteArray[i];
         }
         
         // fill byte array 2 with an offset appropriate for long job or not. 
-        byteArrEnd  = byteArrStart.clone();
-        int jobSize = bLongSet == true ? LONG_JOB : SHORT_JOB;
+                byteArrEnd  = byteArrStart.clone();
+        int     jobSize     = bLongSet == true ? LONG_JOB : SHORT_JOB;
         
         while(jobSize > 0 && byteArrEnd[0] != 122)
         {
@@ -284,6 +337,9 @@ public class BeanstalkManagerMD5
         if(rs.next())    
             id = rs.getInt(1);
         
+        pSt.close();
+        rs.close();
+        
         return id;
     }
     
@@ -297,6 +353,9 @@ public class BeanstalkManagerMD5
         
         ResultSet   rs      = pSt.executeQuery();
         int         userID  = rs.next() == true ? rs.getInt(1) : 0;
+        
+        pSt.close();
+        rs.close();
         
         return userID;
     }
@@ -317,6 +376,10 @@ public class BeanstalkManagerMD5
             
             if(rs.next())
                 md5 = rs.getString(1);
+            
+            st.close();
+            rs.close();
+            
         }
         catch(SQLException sqlE)
         {
@@ -330,8 +393,6 @@ public class BeanstalkManagerMD5
     {
         int len     = s.length();
         byte data[] = s.getBytes();
-        
-        // System.out.println("BeanstalkClientTest1::stringToByteArr: data length: " + data.length);
         
         return data;
     }
@@ -387,6 +448,9 @@ public class BeanstalkManagerMD5
 
             if(rs.next())
                 count = rs.getInt(1);
+            
+            st.close();
+            rs.close();
         }
         catch(SQLException sqlE)
         {
@@ -399,10 +463,13 @@ public class BeanstalkManagerMD5
     
     private void loop()
     {
-        ArrayList<Integer> arrIDs;
+        List<Integer> arrIDs = new ArrayList<Integer>();
         
         while(true)
         {
+            // cleanup the arrIDs list. 
+            arrIDs.clear();
+            
             // for each uncracked md5: 
             try
             {
@@ -425,7 +492,7 @@ public class BeanstalkManagerMD5
                     int userID          = getUserIDByMd5ID(md5ID);
                     int currentRunning  = countRunningJobsByUserID(userID);
 
-                    System.out.println("md5ID: " + md5ID + "; jobs for userID: " + userID + ": " + currentRunning);
+                    // System.out.println("md5ID: " + md5ID + "; jobs for userID: " + userID + ": " + currentRunning);
                     
                     if(currentRunning >= MAX_JOBS_FOR_USER)
                         continue;
@@ -459,6 +526,10 @@ public class BeanstalkManagerMD5
             {
                 System.err.println("SQLException in main loop: " + sqlE.toString());
             }
+            catch(OutOfMemoryError oomE)
+            {
+                System.err.println("out of memory exception caught. size of array: " + arrIDs.size());
+            }
 
             // wait some time. 
             try
@@ -471,6 +542,8 @@ public class BeanstalkManagerMD5
                 return;
             }
         }
+        
+        
     }
     
     /**
